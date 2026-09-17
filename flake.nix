@@ -1,20 +1,23 @@
 {
   # Nix flake for the `unsloth` CLI and the Unsloth desktop app, built from
-  # this checkout. Three derivations, sharing one frontend build:
+  # this checkout. Three builds, sharing one frontend build:
   #
-  #   unsloth-frontend  studio/frontend  ->  the Vite `dist/` the other two embed
-  #   unsloth           the Python CLI (pip's `unsloth` wheel, base extras only)
-  #   unsloth-desktop   studio/src-tauri, the Tauri app that ships as the .deb
+  #   unsloth-frontend          studio/frontend  ->  the Vite `dist/` the other two embed
+  #   unsloth-unwrapped         the Python CLI (pip's `unsloth` wheel, base extras only)
+  #   unsloth-desktop-unwrapped studio/src-tauri, the Tauri app that ships as the .deb
   #
   # Both leaves reuse the upstream build path (npm run build, python -m build's
   # setuptools backend, cargo tauri build --bundles deb) instead of re-describing
   # it. What the app installs for itself on first launch (uv-managed Python,
   # torch, llama.cpp / whisper.cpp prebuilts, node) is still downloaded into
-  # ~/.unsloth/studio by install.sh / setup.sh exactly as on any other distro;
-  # the wrappers below only put the tools those scripts probe for on PATH and
-  # libvulkan where the Vulkan llama.cpp prebuilt (AMD/Intel GPUs) can dlopen it.
-  # Those downloaded binaries are foreign ELF, so on NixOS run with
-  # `programs.nix-ld.enable = true` (plus the GPU's driver in NIX_LD_LIBRARY_PATH).
+  # ~/.unsloth/studio by install.sh / setup.sh exactly as on any other distro.
+  #
+  # Those downloads are ordinary Linux binaries that expect /lib64/ld-linux*.so
+  # and libstdc++ in /usr/lib, which a Nix store does not have. So the public
+  # `unsloth` and `unsloth-desktop` outputs run the unwrapped builds inside a
+  # buildFHSEnv sandbox: an FHS view of the libraries and tools those binaries
+  # and the install scripts need, on top of the real home, /tmp, /run, /dev and
+  # /run/opengl-driver (Vulkan ICDs, libGL). No nix-ld or host setup required.
   description = "Unsloth CLI and Unsloth Desktop, built from source";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -42,7 +45,8 @@
           # What install.sh / setup.sh and the desktop app exec on Linux and never
           # fetch themselves: a POSIX userland, a download transport, the GPU probe
           # (lspci decides AMD/Intel vs NVIDIA and picks the ROCm/Vulkan bundles),
-          # a port checker (ss), uv for the managed venv, and xdg-open.
+          # a port checker (ss), uv for the managed venv, xdg-open, and the
+          # update-desktop-database behind the unsloth:// deep-link handler.
           runtimeTools = with pkgs; [
             bash
             coreutils
@@ -62,21 +66,42 @@
             uv
             python3
             xdg-utils
-            desktop-file-utils # update-desktop-database, for the unsloth:// deep-link handler
+            desktop-file-utils
           ];
+
+          # What the downloaded binaries link against: the uv-managed CPython
+          # (python-build-standalone), torch and its ROCm wheels, the llama.cpp /
+          # whisper.cpp prebuilts (Vulkan build for AMD and Intel GPUs), and node.
           runtimeLibs = with pkgs; [
+            stdenv.cc.cc.lib # libstdc++, libgcc_s, libgomp
+            zlib
+            bzip2
+            xz
+            libffi
+            libxcrypt-legacy
+            ncurses
+            openssl
+            expat
             vulkan-loader
+            libGL
+            libdrm
+            numactl
+            elfutils
           ];
-          wrapperArgs = [
-            "--prefix"
-            "PATH"
-            ":"
-            (lib.makeBinPath runtimeTools)
-            "--prefix"
-            "LD_LIBRARY_PATH"
-            ":"
-            (lib.makeLibraryPath runtimeLibs)
-          ];
+
+          # Run an unwrapped build's binary of the same name inside the FHS sandbox.
+          fhsWrap =
+            {
+              name,
+              unwrapped,
+              extraInstallCommands ? "",
+            }:
+            pkgs.buildFHSEnv {
+              inherit name extraInstallCommands;
+              targetPkgs = _: runtimeTools ++ runtimeLibs;
+              runScript = "${unwrapped}/bin/${name}";
+              meta = unwrapped.meta;
+            };
         in
         rec {
           unsloth-frontend = pkgs.buildNpmPackage {
@@ -114,7 +139,7 @@
             '';
           };
 
-          unsloth = pkgs.python3Packages.buildPythonApplication {
+          unsloth-unwrapped = pkgs.python3Packages.buildPythonApplication {
             pname = "unsloth";
             inherit version;
             pyproject = true;
@@ -148,8 +173,6 @@
               cp -r --no-preserve=mode ${unsloth-frontend} studio/frontend/dist
             '';
 
-            makeWrapperArgs = wrapperArgs;
-
             # The suites need the studio extra and a GPU.
             doCheck = false;
             pythonImportsCheck = [ "unsloth_cli" ];
@@ -165,7 +188,7 @@
             };
           };
 
-          unsloth-desktop = pkgs.stdenv.mkDerivation {
+          unsloth-desktop-unwrapped = pkgs.stdenv.mkDerivation {
             pname = "unsloth-desktop";
             inherit version;
             src = self;
@@ -233,16 +256,26 @@
               test -f $out/lib/*/install.sh
             '';
 
-            preFixup = ''
-              gappsWrapperArgs+=(${lib.escapeShellArgs wrapperArgs})
-            '';
-
             meta = {
               description = "Unsloth Desktop: the Tauri app around Unsloth Studio";
               homepage = "https://unsloth.ai";
               license = lib.licenses.agpl3Only;
               mainProgram = "unsloth-desktop";
             };
+          };
+
+          unsloth = fhsWrap {
+            name = "unsloth";
+            unwrapped = unsloth-unwrapped;
+          };
+
+          unsloth-desktop = fhsWrap {
+            name = "unsloth-desktop";
+            unwrapped = unsloth-desktop-unwrapped;
+            # The launcher entry and icons; its Exec resolves to this wrapper.
+            extraInstallCommands = ''
+              ln -s ${unsloth-desktop-unwrapped}/share $out/share
+            '';
           };
 
           default = unsloth-desktop;
