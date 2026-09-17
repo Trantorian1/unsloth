@@ -62,6 +62,7 @@
             uv
             python3
             xdg-utils
+            desktop-file-utils # update-desktop-database, for the unsloth:// deep-link handler
           ];
           runtimeLibs = with pkgs; [
             vulkan-loader
