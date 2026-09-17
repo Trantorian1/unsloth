@@ -224,7 +224,6 @@
             # Only the binary is renamed so it does not clash with the CLI's
             # bin/unsloth when both are installed into one profile.
             postInstall = ''
-              find $out -maxdepth 3 -not -path '*/icons/*'
               # Tauri keeps cargo's binary name (unsloth-studio); ship it as
               # unsloth-desktop next to the CLI's bin/unsloth.
               mv $out/bin/unsloth-studio $out/bin/unsloth-desktop
