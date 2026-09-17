@@ -223,10 +223,14 @@
             # Only the binary is renamed so it does not clash with the CLI's
             # bin/unsloth when both are installed into one profile.
             postInstall = ''
-              mv $out/bin/unsloth $out/bin/unsloth-desktop
-              substituteInPlace $out/share/applications/*.desktop \
-                --replace-fail "Exec=unsloth " "Exec=unsloth-desktop " \
-                --replace-fail "StartupWMClass=unsloth" "StartupWMClass=unsloth-desktop"
+              find $out -maxdepth 3 -not -path '*/icons/*'
+              # Tauri keeps cargo's binary name (unsloth-studio); ship it as
+              # unsloth-desktop next to the CLI's bin/unsloth.
+              mv $out/bin/unsloth-studio $out/bin/unsloth-desktop
+              sed -i -E 's|^Exec=\S+|Exec=unsloth-desktop|; s|^StartupWMClass=.*|StartupWMClass=unsloth-desktop|' \
+                $out/share/applications/*.desktop
+              # The first-run installer the app resolves through Tauri's resource dir.
+              test -f $out/lib/*/install.sh
             '';
 
             preFixup = ''
