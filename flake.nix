@@ -123,6 +123,9 @@
               setuptools
               setuptools-scm
             ];
+            # pyproject.toml pins exact setuptools / setuptools-scm versions that
+            # nixpkgs does not carry; the newer ones build the wheel the same way.
+            pypaBuildFlags = [ "--skip-dependency-check" ];
 
             # pyproject.toml [project.dependencies]. The `studio` extra (torch,
             # fastapi, ...) is not installed here: `unsloth studio setup` builds
@@ -172,6 +175,7 @@
               # rev instead of maintaining an outputHashes entry.
               allowBuiltinFetchGit = true;
             };
+            cargoRoot = "studio/src-tauri";
             buildAndTestSubdir = "studio/src-tauri";
 
             nativeBuildInputs = with pkgs; [
