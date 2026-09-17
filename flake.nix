@@ -89,19 +89,7 @@
             elfutils
           ];
 
-          # Run an unwrapped build's binary of the same name inside the FHS sandbox.
-          fhsWrap =
-            {
-              name,
-              unwrapped,
-              extraInstallCommands ? "",
-            }:
-            pkgs.buildFHSEnv {
-              inherit name extraInstallCommands;
-              targetPkgs = _: runtimeTools ++ runtimeLibs;
-              runScript = "${unwrapped}/bin/${name}";
-              meta = unwrapped.meta;
-            };
+          targetPkgs = _: runtimeTools ++ runtimeLibs;
         in
         rec {
           unsloth-frontend = pkgs.buildNpmPackage {
@@ -249,11 +237,26 @@
             postInstall = ''
               # Tauri keeps cargo's binary name (unsloth-studio); ship it as
               # unsloth-desktop next to the CLI's bin/unsloth.
-              mv $out/bin/unsloth-studio $out/bin/unsloth-desktop
+              mv $out/bin/unsloth-studio $out/bin/.unsloth-desktop-real
+              # The app records its own /proc/self/exe for launch-at-login and
+              # the unsloth:// handler. The sandbox launcher below binds the real
+              # binary over its own path and names it here, so what gets recorded
+              # is a path that starts the sandbox. Unset, this runs the binary.
+              cat > $out/bin/unsloth-desktop <<EOF
+              #!${pkgs.runtimeShell}
+              exec "\''${UNSLOTH_DESKTOP_EXE:-$out/bin/.unsloth-desktop-real}" "\$@"
+              EOF
+              chmod +x $out/bin/unsloth-desktop
               sed -i -E 's|^Exec=\S+|Exec=unsloth-desktop|; s|^StartupWMClass=.*|StartupWMClass=unsloth-desktop|' \
                 $out/share/applications/*.desktop
               # The first-run installer the app resolves through Tauri's resource dir.
               test -f $out/lib/*/install.sh
+            '';
+
+            # Wrap the shim (GIO modules, GStreamer, schemas), not the binary too.
+            dontWrapGApps = true;
+            preFixup = ''
+              wrapGApp $out/bin/unsloth-desktop
             '';
 
             meta = {
@@ -264,19 +267,37 @@
             };
           };
 
-          unsloth = fhsWrap {
+          unsloth = pkgs.buildFHSEnv {
             name = "unsloth";
-            unwrapped = unsloth-unwrapped;
+            inherit targetPkgs;
+            runScript = "${unsloth-unwrapped}/bin/unsloth";
+            meta = unsloth-unwrapped.meta;
           };
 
-          unsloth-desktop = fhsWrap {
-            name = "unsloth-desktop";
-            unwrapped = unsloth-desktop-unwrapped;
-            # The launcher entry and icons; its Exec resolves to this wrapper.
-            extraInstallCommands = ''
-              ln -s ${unsloth-desktop-unwrapped}/share $out/share
-            '';
+          unsloth-desktop-fhs = pkgs.buildFHSEnv {
+            name = "unsloth-desktop-fhs";
+            inherit targetPkgs;
+            runScript = "${unsloth-desktop-unwrapped}/bin/unsloth-desktop";
+            # Expanded when the sandbox starts: with UNSLOTH_DESKTOP_EXE set by
+            # the launcher below, the real binary appears at the launcher's path.
+            extraBwrapArgs = [
+              ''''${UNSLOTH_DESKTOP_EXE:+--ro-bind ${unsloth-desktop-unwrapped}/bin/.unsloth-desktop-real "$UNSLOTH_DESKTOP_EXE"}''
+            ];
           };
+
+          unsloth-desktop = pkgs.runCommand "unsloth-desktop-${version}" { inherit (unsloth-desktop-unwrapped) meta; } ''
+            mkdir -p $out/bin
+            cat > $out/bin/unsloth-desktop <<EOF
+            #!${pkgs.runtimeShell}
+            export UNSLOTH_DESKTOP_EXE=$out/bin/unsloth-desktop
+            exec ${unsloth-desktop-fhs}/bin/unsloth-desktop-fhs "\$@"
+            EOF
+            chmod +x $out/bin/unsloth-desktop
+            # Tauri resolves resources relative to the recorded binary, the launcher
+            # entry and icons come along, and Exec=unsloth-desktop resolves here.
+            ln -s ${unsloth-desktop-unwrapped}/lib $out/lib
+            ln -s ${unsloth-desktop-unwrapped}/share $out/share
+          '';
 
           default = unsloth-desktop;
         }
