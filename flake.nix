@@ -1,23 +1,4 @@
 {
-  # Nix flake for the `unsloth` CLI and the Unsloth desktop app, built from
-  # this checkout. Three builds, sharing one frontend build:
-  #
-  #   unsloth-frontend          studio/frontend  ->  the Vite `dist/` the other two embed
-  #   unsloth-unwrapped         the Python CLI (pip's `unsloth` wheel, base extras only)
-  #   unsloth-desktop-unwrapped studio/src-tauri, the Tauri app that ships as the .deb
-  #
-  # Both leaves reuse the upstream build path (npm run build, python -m build's
-  # setuptools backend, cargo tauri build --bundles deb) instead of re-describing
-  # it. What the app installs for itself on first launch (uv-managed Python,
-  # torch, llama.cpp / whisper.cpp prebuilts, node) is still downloaded into
-  # ~/.unsloth/studio by install.sh / setup.sh exactly as on any other distro.
-  #
-  # Those downloads are ordinary Linux binaries that expect /lib64/ld-linux*.so
-  # and libstdc++ in /usr/lib, which a Nix store does not have. So the public
-  # `unsloth` and `unsloth-desktop` outputs run the unwrapped builds inside a
-  # buildFHSEnv sandbox: an FHS view of the libraries and tools those binaries
-  # and the install scripts need, on top of the real home, /tmp, /run, /dev and
-  # /run/opengl-driver (Vulkan ICDs, libGL). No nix-ld or host setup required.
   description = "Unsloth CLI and Unsloth Desktop, built from source";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -126,6 +107,21 @@
 
         unsloth-desktop = wrapPackage unsloth-desktop-unwrapped {
           name = "unsloth-desktop";
+
+          executableName = ".unsloth-desktop-fhs";
+          extraBwrapArgs = [
+            ''''${UNSLOTH_DESKTOP_EXE:+--ro-bind ${unsloth-desktop-unwrapped}/bin/.unsloth-desktop-real "$UNSLOTH_DESKTOP_EXE"}''
+          ];
+          extraInstallCommands = ''
+            cat > $out/bin/unsloth-desktop <<EOF
+            #!${pkgs.runtimeShell}
+            export UNSLOTH_DESKTOP_EXE=$out/bin/unsloth-desktop
+            exec $out/bin/.unsloth-desktop-fhs "\$@"
+            EOF
+            chmod +x $out/bin/unsloth-desktop
+            ln -s ${unsloth-desktop-unwrapped}/lib $out/lib
+            ln -s ${unsloth-desktop-unwrapped}/share $out/share
+          '';
         };
 
         default = unsloth-desktop;
