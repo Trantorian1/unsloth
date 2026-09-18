@@ -38,48 +38,28 @@
           );
         };
 
-        # Runtime dependencies which unsloth or unsloth-desktop won't autofetch
-        # on their own
-        runtimeTools = with pkgs; [
-          bash
-          coreutils
-          findutils
-          gawk
-          gnugrep
-          gnused
-          gnutar
-          gzip
-          getent
-          procps
-          util-linux
-          curl
-          git
-          pciutils
-          iproute2
-          uv
-          python3
-          xdg-utils
-          desktop-file-utils
-        ];
-
-        runtimeLibs = with pkgs; [
-          stdenv.cc.cc.lib # libstdc++, libgcc_s, libgomp
-          zlib
-          bzip2
-          xz
-          libffi
-          libxcrypt-legacy
-          ncurses
-          openssl
-          expat
-          vulkan-loader
-          libGL
-          libdrm
-          numactl
-          elfutils
-        ];
-
-        targetPkgs = _: runtimeTools ++ runtimeLibs;
+        # What the sandbox adds on top of buildFHSEnv's base set (glibc,
+        # libstdc++, bash, coreutils, gawk, sed, grep, tar, gzip, bzip2, xz):
+        # the tools install.sh / setup.sh and the desktop app exec and never
+        # fetch themselves, plus the two libraries the downloaded binaries
+        # still link against (zlib for the wheels, libvulkan for the Vulkan
+        # llama.cpp prebuilt on AMD and Intel GPUs).
+        targetPkgs = _:
+          with pkgs; [
+            getent
+            procps
+            util-linux
+            curl
+            git
+            pciutils
+            iproute2
+            uv
+            python3
+            xdg-utils
+            desktop-file-utils
+            zlib
+            vulkan-loader
+          ];
 
         # Bundles the resulting executables in a FHS sandbox to accomodate for
         # Unsloth's runtime dependency fetching

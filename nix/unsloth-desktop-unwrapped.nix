@@ -20,22 +20,17 @@ pkgs.stdenv.mkDerivation {
   buildAndTestSubdir = "studio/src-tauri";
 
   nativeBuildInputs = with pkgs; [
-    cargo-tauri.hook
+    cargo-tauri.hook # brings cargo
     rustPlatform.cargoSetupHook
-    cargo
     rustc
     pkg-config
-    jq
     wrapGAppsHook3
   ];
 
   buildInputs = with pkgs; [
-    webkitgtk_4_1
-    gtk3
-    libsoup_3
-    openssl
+    webkitgtk_4_1 # propagates gtk3 and libsoup_3
     glib-networking # TLS for the webview (huggingface.co, updater manifest)
-    libayatana-appindicator # tray icon
+    libayatana-appindicator # tray icon; the deb bundler also looks it up
     # H.264 playback and capture in the webview, mirroring the CI apt list.
     gst_all_1.gst-plugins-base
     gst_all_1.gst-plugins-good
@@ -43,14 +38,21 @@ pkgs.stdenv.mkDerivation {
     gst_all_1.gst-libav
   ];
 
-  postPatch = ''
-    # The frontend is already built; drop the `npm run build` Tauri would
-    # run and give it the dist it expects at ../frontend/dist.
-    cp -r --no-preserve=mode ${unsloth-frontend} studio/frontend/dist
-    jq 'del(.build.beforeBuildCommand) | .bundle.createUpdaterArtifacts = false' \
-      studio/src-tauri/tauri.conf.json > tauri.conf.json.tmp
-    mv tauri.conf.json.tmp studio/src-tauri/tauri.conf.json
+  # Merged into tauri.conf.json (RFC 7396, so null deletes): the frontend is
+  # already built, so drop the `npm run build` Tauri would run and point it at
+  # the dist directly; updater artifacts would need a signing key.
+  tauriBuildFlags = [
+    "--config"
+    (builtins.toJSON {
+      build = {
+        beforeBuildCommand = null;
+        frontendDist = "${unsloth-frontend}";
+      };
+      bundle.createUpdaterArtifacts = false;
+    })
+  ];
 
+  postPatch = ''
     # The tray icon crate dlopens the appindicator library by soname.
     substituteInPlace $cargoDepsCopy/libappindicator-sys-*/src/lib.rs \
       --replace-fail "libayatana-appindicator3.so.1" \
@@ -68,7 +70,7 @@ pkgs.stdenv.mkDerivation {
     # unsloth-desktop next to the CLI's bin/unsloth.
     mv $out/bin/unsloth-studio $out/bin/.unsloth-desktop-real
     # The app records its own /proc/self/exe for launch-at-login and
-    # the unsloth:// handler. The sandbox launcher below binds the real
+    # the unsloth:// handler. The sandbox launcher (flake.nix) binds the real
     # binary over its own path and names it here, so what gets recorded
     # is a path that starts the sandbox. Unset, this runs the binary.
     cat > $out/bin/unsloth-desktop <<EOF
