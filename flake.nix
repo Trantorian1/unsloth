@@ -11,6 +11,7 @@
       "x86_64-linux"
       "aarch64-linux"
     ];
+
     forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
 
     # pyproject.toml reads the version from this attribute too.
@@ -18,6 +19,8 @@
       builtins.match ".*__version__ = \"([^\"]+)\".*" (builtins.readFile ./unsloth/_version.py)
     );
   in {
+    formatter = forAllSystems (pkgs: pkgs.alejandra);
+
     packages = forAllSystems (
       pkgs: let
         inherit (pkgs) lib;
@@ -122,6 +125,21 @@
             ln -s ${unsloth-desktop-unwrapped}/lib $out/lib
             ln -s ${unsloth-desktop-unwrapped}/share $out/share
           '';
+        };
+
+        default = unsloth-desktop;
+      }
+    );
+
+    apps = forAllSystems (
+      pkgs: let
+        inherit (pkgs) lib;
+        packages = self.packages.${pkgs.stdenv.hostPlatform.system};
+      in rec {
+        unsloth-desktop = {
+          type = "app";
+          program = lib.getExe packages.unsloth-desktop;
+          meta = packages.unsloth-desktop.meta;
         };
 
         default = unsloth-desktop;
